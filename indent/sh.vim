@@ -3,7 +3,7 @@
 "
 "   Super Shell indentation
 "
-" Version: 1.1
+" Version: 1.2
 "
 " Description: 
 "
@@ -34,22 +34,31 @@
 "       let b:super_sh_indent_echo = 1
 "
 "
+" History:
+"
+"
+"   Version 1.2:
+"       - Ignore open/close pairs that are in strings
+"       - Fixed super_sh_indent_echo
+"       - Fixed else/elif
+"
 "
 
+let SuperShIndent_Dbg = 0
+
 " Only load this indent file when no other was loaded.
-if exists("b:did_indent")
+if exists("b:did_indent") && ! SuperShIndent_Dbg
   finish
 endif
 
 let b:did_indent = 1
-let b:super_sh_indent_echo = 0
 
 setlocal indentexpr=SuperShIndent()
 setlocal indentkeys+==then,=do,=else,=elif,=esac,=fi,=fin,=fil,=done
 setlocal indentkeys-=:,0#
 
 " Only define the function once.
-if exists("*SuperShIndent")
+if exists("*SuperShIndent") && ! SuperShIndent_Dbg
   finish
 endif
 
@@ -83,26 +92,25 @@ function! SuperShIndent()
     "
     " Call indentation adjustment functions.
     "
-    let adj = adj + GetPairIndent(currline, lastline, lastlnum, '(', ')')
-    let adj = adj + GetPairIndent(currline, lastline, lastlnum, '\[\[', ']]')
+    let adj = adj + GetPairIndent(currline, lastline, lastlnum, '(', '', ')')
+    let adj = adj + GetPairIndent(currline, lastline, lastlnum, '\[\[', '', ']]')
     let adj = adj + GetCaseIndent(currline, lastline, lastlnum)
     let adj = adj + GetContIndent(currline, lastline, prevline)
 
     let adj = adj + GetPairIndent(currline, lastline, lastlnum,
-                \ '{', '}')
+                \ '{', '', '}')
     let adj = adj + GetPairIndent(currline, lastline, lastlnum,
-                \ '\<do\>', '\<done\>')
+                \ '\<do\>', '', '\<done\>')
     let adj = adj + GetPairIndent(currline, lastline, lastlnum,
-                \ '\<case\>', '\<esac\>')
+                \ '\<case\>', '', '\<esac\>')
     let adj = adj + GetPairIndent(currline, lastline, lastlnum,
-                \ '\<then\>', '\<fi\>')
-
+                \ '\<then\>', '\<else\>', '\(\<elif\>\|\<fi\>\)')
 
     " Get default indent and add our adjustment
     let prevind = indent(lastlnum)
 
-    if b:super_indent_echo
-        echo g:lastindent
+    if b:super_sh_indent_echo
+        echom g:lastindent
     endif
 
     return adj + prevind
@@ -113,7 +121,7 @@ endfunction
 " Get additional indentation based on blocks of code, as defined by the Head
 " and Tail patterns.
 "
-function! GetPairIndent(CurrLine, LastLine, LastLNum, Head, Tail)
+function! GetPairIndent(CurrLine, LastLine, LastLNum, Head, Mid, Tail)
 
     let levels = 0
     let adj = 0
@@ -123,11 +131,12 @@ function! GetPairIndent(CurrLine, LastLine, LastLNum, Head, Tail)
     " How many levels were started on the last line?  Search backwards for
     " pair starters until we're not on the last nonblank.
     while 1
-        let pairstart = searchpair(a:Head, '', a:Tail, 'Wb')
+        let pairstart = searchpair(a:Head, a:Mid, a:Tail, 'Wb')
         if pairstart == 0 || pairstart != a:LastLNum
             break
         endif
-        if "shComment" == synIDattr(synID(line("."), col("."), 1), "name")
+        let syn = synIDattr(synID(line("."), col("."), 1), "name")
+        if syn =~ 'shComment\|sh\(Single\|Double\)Quote'
             break
         endif
         let levels = levels + 1
@@ -144,26 +153,28 @@ function! GetPairIndent(CurrLine, LastLine, LastLNum, Head, Tail)
         " If the line starts with an open, The close shouldn't be counted as
         " such, because we're looking for closes that didn't start on this
         " line.
-        if a:LastLine =~ '^\s*' . a:Head 
+        if a:LastLine =~ '^\s*' . a:Head || 
+                    \ (a:Mid != '' && a:LastLine =~ '^\s*' . a:Mid)
             let levels = 1
         endif
 
         " If we're calculating close parens and this is a new case condition,
         " then the next close is the end of the conditional and we don't want
         " to count it.
-        if a:Tail =~ ')'
+        if a:Tail == ')'
             if "shCaseEsac" == synIDattr(synID(line("."), col("."), 1), "name")
-                call searchpair(a:Head, '', a:Tail, 'W')
+                call searchpair(a:Head, a:Mid, a:Tail, 'W')
             endif
         endif
 
         " Count the closes on the current line (i.e. LastLNum), ignoring those
         " that occur w/in a comment
         while 1
-            if a:LastLNum != searchpair(a:Head, '', a:Tail, 'W')
+            if a:LastLNum != searchpair(a:Head, a:Mid, a:Tail, 'W')
                 break
             endif
-            if "shComment" == synIDattr(synID(line("."), col("."), 1), "name")
+            let syn = synIDattr(synID(line("."), col("."), 1), "name")
+            if syn =~ 'shComment\|sh\(Single\|Double\)Quote'
                 break
             endif
             let levels = levels - 1
@@ -174,17 +185,19 @@ function! GetPairIndent(CurrLine, LastLine, LastLNum, Head, Tail)
     " indentation of the next line because it is the first thing on the line
     " and won't be counted as a "close on the last line".
     if a:CurrLine =~ '^\s*' . a:Tail 
+                \ || (a:Mid != '' && a:CurrLine =~ '^\s*' . a:Mid)
         let levels = levels - 1
     endif
 
     " Restore original cursor location
-    call cursor(origline, origcol)  
+    call cursor(origline, origcol)
 
     let adj = &sw*levels
-    if adj != 0 && b:super_indent_echo
+    if adj != 0 && b:super_sh_indent_echo
         let g:lastindent = g:lastindent . 
                     \ "GetPairIndent(" . a:Head . "):" . adj . " "
     endif
+
     return adj
 
 endfunction
@@ -223,7 +236,7 @@ function! GetCaseIndent(CurrLine, LastLine, LastLNum)
     "
     " Return the result
     "
-    if adj != 0 && b:super_indent_echo
+    if adj != 0 && b:super_sh_indent_echo
         let g:lastindent = g:lastindent . "GetCaseIndent:" . adj . " "
     endif
     return adj
@@ -250,7 +263,7 @@ function! GetContIndent(CurrLine, LastLine, prevline)
         let adj = adj - &sw
     endif
 
-    if adj != 0 && b:super_indent_echo
+    if adj != 0 && b:super_sh_indent_echo
         let g:lastindent = g:lastindent . "GetContIndent:" . adj . " "
     endif
     return adj
