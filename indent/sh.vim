@@ -36,6 +36,8 @@
 "
 " History:
 "
+"   Version 1.3:
+"       - fixed elif (again)
 "
 "   Version 1.2:
 "       - Ignore open/close pairs that are in strings
