@@ -3,7 +3,7 @@
 "
 "   Super Shell indentation
 "
-" Version: 1.2
+" Version: 1.5
 "
 " Description: 
 "
@@ -36,6 +36,11 @@
 "
 " History:
 "
+"   Version 1.5:
+"       - Fixed indentation of first line in a file
+"       - Fixed ignoring of certain keywords in comments
+"       - Tested on 6.2
+"
 "   Version 1.4:
 "       - Fixed line continuation w/in comments and strings
 "       - Fixed an infinite loop
@@ -51,6 +56,11 @@
 "
 
 let SuperShIndent_Dbg = 0
+
+if version < 602
+    echoerr "Super Shell Indentation only supported for Vim 6.2 and up."
+    finish
+endif
 
 " Only load this indent file when no other was loaded.
 if exists("b:did_indent") && ! SuperShIndent_Dbg
@@ -120,6 +130,7 @@ function! SuperShIndent()
 
     " Get default indent and add our adjustment
     let prevind = indent(lastlnum)
+    let prevind = (prevind == -1 ? 0 : prevind)
 
     if b:super_sh_indent_echo
         echom g:lastindent
@@ -149,7 +160,7 @@ function! GetPairIndent(CurrLine, LastLine, LastLNum, Head, Mid, Tail)
         endif
         let syn = synIDattr(synID(line("."), col("."), 1), "name")
         if syn =~ 'shComment\|sh\(Single\|Double\)Quote'
-            break
+            continue
         endif
         let levels = levels + 1
     endwhile
@@ -179,8 +190,8 @@ function! GetPairIndent(CurrLine, LastLine, LastLNum, Head, Mid, Tail)
             endif
         endif
 
-        " Count the closes on the current line (i.e. LastLNum), ignoring those
-        " that occur w/in a comment
+        " Count the closes on the current line (i.e. LastLNum), stopping once
+        " we've hit comments.
         while 1
             let pairend = searchpair(a:Head, a:Mid, a:Tail, 'W')
             if pairend == 0 || a:LastLNum != pairend 
