@@ -1,0 +1,14 @@
+This is a mirror of http://www.vim.org/scripts/script.php?script_id=1215
+
+This is a shell indentation script that calculates the indent level based on begin/end syntax pairs, as opposed to complex conditionals and pattern matching.
+
+This script also introduces indentation for:
+
+           case blocks 
+           paren blocks
+           '[[' blocks
+           line continuation
+
+It's slower than the stock indentation, but IMHO, it doesn the "right" thing much more often.  :)
+
+
