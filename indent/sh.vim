@@ -36,6 +36,10 @@
 "
 " History:
 "
+"   Version 1.4:
+"       - Fixed line continuation w/in comments and strings
+"       - Fixed an infinite loop
+"
 "   Version 1.3:
 "       - fixed elif (again)
 "
@@ -65,6 +69,10 @@ if exists("*SuperShIndent") && ! SuperShIndent_Dbg
 endif
 
 setlocal indentexpr=SuperShIndent()
+
+if ! exists("b:super_sh_indent_echo")
+    let b:super_sh_indent_echo = 0
+endif
 
 
 function! SuperShIndent()
@@ -96,9 +104,6 @@ function! SuperShIndent()
     "
     let adj = adj + GetPairIndent(currline, lastline, lastlnum, '(', '', ')')
     let adj = adj + GetPairIndent(currline, lastline, lastlnum, '\[\[', '', ']]')
-    let adj = adj + GetCaseIndent(currline, lastline, lastlnum)
-    let adj = adj + GetContIndent(currline, lastline, prevline)
-
     let adj = adj + GetPairIndent(currline, lastline, lastlnum,
                 \ '{', '', '}')
     let adj = adj + GetPairIndent(currline, lastline, lastlnum,
@@ -107,6 +112,11 @@ function! SuperShIndent()
                 \ '\<case\>', '', '\<esac\>')
     let adj = adj + GetPairIndent(currline, lastline, lastlnum,
                 \ '\<then\>', '\<else\>', '\(\<elif\>\|\<fi\>\)')
+
+    let ContRE = '\(\\\||\s*\|&&\s*\)$'
+    let adj = adj + GetContIndent(ContRE, currline, lastline, lastlnum, prevlnum)
+
+    let adj = adj + GetCaseIndent(currline, lastline, lastlnum)
 
     " Get default indent and add our adjustment
     let prevind = indent(lastlnum)
@@ -172,7 +182,8 @@ function! GetPairIndent(CurrLine, LastLine, LastLNum, Head, Mid, Tail)
         " Count the closes on the current line (i.e. LastLNum), ignoring those
         " that occur w/in a comment
         while 1
-            if a:LastLNum != searchpair(a:Head, a:Mid, a:Tail, 'W')
+            let pairend = searchpair(a:Head, a:Mid, a:Tail, 'W')
+            if pairend == 0 || a:LastLNum != pairend 
                 break
             endif
             let syn = synIDattr(synID(line("."), col("."), 1), "name")
@@ -245,28 +256,57 @@ function! GetCaseIndent(CurrLine, LastLine, LastLNum)
 
 endfunction
 
-" 
-" Get indentation offset for continuation lines.
-"
-function! GetContIndent(CurrLine, LastLine, prevline)
+function! GetContIndent(Pattern, CurrLine, LastLine, LastLNum, PrevLNum)
 
     let adj = 0
+    let origcol = col(".")
+    let origline = line(".")
+    let lastcont = 0
+    let prevcont = 0
 
-    " Increase indent when previous line ends with '\', a pipe ('|'), or a
-    " conditional ('&&', '||').
-    let ContRE = '\(\\\||\s*\|&&\s*\)$'
+    " Get the last matching line number.  If the match occurs w/in a comment
+    " or string, then it's a non-match.
+    let lastmatchlnum = search(a:Pattern, 'Wb')
+    let syn = synIDattr(synID(line("."), col("."), 1), "name")
+    if syn =~ 'shComment\|sh\(Single\|Double\)Quote'
+        let lastmatchlnum = 0
+    endif
 
-    " If this is the first continued line, increase the indent.  If this is
-    " the first non-continued line, decrease the indent.  Take into account
-    " open brackets at the start of the current and last line.
-    if a:LastLine =~ ContRE && a:prevline !~ ContRE && a:CurrLine !~ '^\s*{'
+    " Get the previous matching line number.  If the match occurs w/in a
+    " comment or string, then it's a non-match.
+    let prevmatchlnum = search(a:Pattern, 'Wb')
+    let syn = synIDattr(synID(line("."), col("."), 1), "name")
+    if syn =~ 'shComment\|sh\(Single\|Double\)Quote'
+        let prevmatchlnum = 0
+    endif
+
+    " Figure out the last and previous continuation status
+    if lastmatchlnum && lastmatchlnum == a:LastLNum 
+        let lastcont = 1
+    endif
+    if ( lastmatchlnum && lastmatchlnum == a:PrevLNum ) 
+                \ || ( prevmatchlnum && prevmatchlnum == a:PrevLNum )
+        let prevcont = 1
+    endif
+
+    "echom "lastcont: " . lastcont . 
+    "            \ ", prevcont: " . prevcont . 
+    "            \ ", lastmatchlnum: " . lastmatchlnum .
+    "            \ ", prevmatchlnum: " . prevmatchlnum .
+    "            \ ", lastlnum: " . a:LastLNum . 
+    "            \ ", PrevLNum: " . a:PrevLNum
+
+    if lastcont && !prevcont && a:CurrLine !~ '^\s*{'
         let adj = adj + &sw
-    elseif a:LastLine !~ ContRE && a:prevline =~ ContRE && a:LastLine !~ '^\s*{'
+    elseif !lastcont && prevcont && a:LastLine !~ '^\s*{'
         let adj = adj - &sw
     endif
 
+    call cursor(origline, origcol)
+
     if adj != 0 && b:super_sh_indent_echo
-        let g:lastindent = g:lastindent . "GetContIndent:" . adj . " "
+        let g:lastindent = g:lastindent . 
+                    \ "GetContIndent('" . a:Pattern . "'):" . adj . " "
     endif
     return adj
 
