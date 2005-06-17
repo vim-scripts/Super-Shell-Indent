@@ -3,9 +3,9 @@
 "
 "   Super Shell indentation
 "
-" Version: 1.5
+" Version: 1.6
 "
-" Description: 
+" Description:
 "
 "   This is a shell indentation script that calculates the indent level based
 "   on begin/end syntax pairs, as opposed to complex conditionals and pattern
@@ -35,6 +35,12 @@
 "
 "
 " History:
+"
+"   TODO:
+"       - Differentiate between '\' and &&/||/| line continuations
+"
+"   Version 1.6:
+"       - Performance improvements
 "
 "   Version 1.5:
 "       - Fixed indentation of first line in a file
@@ -123,8 +129,9 @@ function! SuperShIndent()
     let adj = adj + GetPairIndent(currline, lastline, lastlnum,
                 \ '\<then\>', '\<else\>', '\(\<elif\>\|\<fi\>\)')
 
-    let ContRE = '\(\\\||\s*\|&&\s*\)$'
+    let ContRE = '\(|\s*\|&&\s*\)$'
     let adj = adj + GetContIndent(ContRE, currline, lastline, lastlnum, prevlnum)
+    let adj = adj + GetSimpleContIndent(lastline, lastlnum)
 
     let adj = adj + GetCaseIndent(currline, lastline, lastlnum)
 
@@ -151,19 +158,26 @@ function! GetPairIndent(CurrLine, LastLine, LastLNum, Head, Mid, Tail)
     let origcol = col(".")
     let origline = line(".")
 
+    "
     " How many levels were started on the last line?  Search backwards for
-    " pair starters until we're not on the last nonblank.
-    while 1
-        let pairstart = searchpair(a:Head, a:Mid, a:Tail, 'Wb')
-        if pairstart == 0 || pairstart != a:LastLNum
-            break
-        endif
-        let syn = synIDattr(synID(line("."), col("."), 1), "name")
-        if syn =~ 'shComment\|sh\(Single\|Double\)Quote'
-            continue
-        endif
-        let levels = levels + 1
-    endwhile
+    " pair starters until we're not on the last nonblank.  If the last line
+    " doesn't contain the pair-starter, then don't bother with searchpair();
+    " it's a performance bottleneck because (I think) it will always search
+    " all the way back until it finds a match or can't search any more.
+    "
+    if a:LastLine =~ a:Head
+        while 1
+            let pairstart = searchpair(a:Head, a:Mid, a:Tail, 'Wb')
+            if pairstart == 0 || pairstart != a:LastLNum
+                break
+            endif
+            let syn = synIDattr(synID(line("."), col("."), 1), "name")
+            if syn =~ 'shComment\|sh\(Single\|Double\)Quote'
+                continue
+            endif
+            let levels = levels + 1
+        endwhile
+    endif
 
     " If we aren't within a level that was started on the last line, then
     " check how many levels were closed on the last line.
@@ -190,19 +204,25 @@ function! GetPairIndent(CurrLine, LastLine, LastLNum, Head, Mid, Tail)
             endif
         endif
 
+        "
         " Count the closes on the current line (i.e. LastLNum), stopping once
-        " we've hit comments.
-        while 1
-            let pairend = searchpair(a:Head, a:Mid, a:Tail, 'W')
-            if pairend == 0 || a:LastLNum != pairend 
-                break
-            endif
-            let syn = synIDattr(synID(line("."), col("."), 1), "name")
-            if syn =~ 'shComment\|sh\(Single\|Double\)Quote'
-                break
-            endif
-            let levels = levels - 1
-        endwhile
+        " we've hit comments.  If the line doesn't even contain the end of the
+        " pair, don't bother with searchpair() (same aforementioned
+        " rationale).
+        "
+        if a:LastLine =~ a:Tail
+            while 1
+                let pairend = searchpair(a:Head, a:Mid, a:Tail, 'W')
+                if pairend == 0 || a:LastLNum != pairend 
+                    break
+                endif
+                let syn = synIDattr(synID(line("."), col("."), 1), "name")
+                if syn =~ 'shComment\|sh\(Single\|Double\)Quote'
+                    break
+                endif
+                let levels = levels - 1
+            endwhile
+        endif
     endif
 
     " If the current line starts with a close, count it.  It won't effect the
@@ -323,3 +343,190 @@ function! GetContIndent(Pattern, CurrLine, LastLine, LastLNum, PrevLNum)
 
 endfunction
 
+"
+" The '\' line continuation should only effect the following line, as opposed
+" to the next non-blank line.
+"
+function! GetSimpleContIndent(LastLine, LastLNum)
+
+    let adj = 0
+    let currcol = col(".")
+    let currline = line(".")
+    let pcont = 0
+    let p2cont = 0
+    let pndendcont = 0
+    let pnbcont = 0
+    let ppnbcont = 0
+
+    "
+    " If the last non-blank is the immediatly previous line, then we'll look
+    " at it and its previous.  Otherwise, we'll see if the prev-non-blank was
+    " the end of a continuation.
+    "
+    if a:LastLNum == currline - 1
+        " Preceding line
+        let pline = getline(currline-1)
+        if pline =~ '\\$'
+            let pcont = 1
+            let syn = synIDattr(synID(currline-1, strlen(pline), 1), "name")
+            if syn =~ 'shComment\|sh\(Single\|Double\)Quote'
+                let pcont = 0
+            endif
+        endif
+
+        " 2nd Preceding line
+        let p2line = getline(currline-2)
+        if p2line =~ '\\$'
+            let p2cont = 1
+            let syn = synIDattr(synID(currline-2, strlen(p2line), 1), "name")
+            if syn =~ 'shComment\|sh\(Single\|Double\)Quote'
+                let p2cont = 0
+            endif
+        endif
+
+        if pcont && !p2cont
+            let adj = adj + &sw
+        elseif !pcont && p2cont
+            let adj = adj - &sw
+        endif
+    else
+        if a:LastLine =~ '\\$'
+            let pnb = getline(a:LastLNum)
+            if pnb =~ '\\$'
+                let syn = synIDattr(synID(a:LastLNum, strlen(pnb), 1), "name")
+                if syn !~ 'shComment\|sh\(Single\|Double\)Quote'
+                    let pnbcont = 1
+                endif
+            endif
+        endif
+        if ! pnbcont
+            let ppnb = getline(a:LastLNum-1)
+            if ppnb =~ '\\$'
+                let syn = synIDattr(synID(a:LastLNum-1, strlen(ppnb), 1), "name")
+                if syn !~ 'shComment\|sh\(Single\|Double\)Quote'
+                    let ppnbcont = 1
+                endif
+            endif
+        endif
+
+        if ! pnbcont && ppnbcont
+            let adj = adj - &sw
+        endif
+    endif
+
+    if adj != 0 && b:super_sh_indent_echo
+        let g:lastindent = g:lastindent . 
+                    \ "GetSimpleContIndent():" . adj . " "
+    endif
+    return adj
+
+endfunction
+
+
+
+
+" Try to do things without using searchpair?
+"
+
+
+function! BalancedCount(String, Open, Close)
+
+    let trimmed = substitute(a:String, '[^\]#.*$', '', '')
+    echo trimmed
+
+    " This won't really work when a string traverses lines...
+    let trimmed = substitute(trimmed, '\([^\\]\@<="\(\\"\|[^"]\)*"\)', '', 'g')
+
+    echo trimmed
+
+endfunction
+
+function! TstBC()
+    call BalancedCount('   foo("{(()((\"""") {}; { # bar', "{", "}")
+endfunction
+
+function! GetPairIndent(CurrLine, LastLine, LastLNum, Head, Mid, Tail)
+
+    let levels = 0
+    let adj = 0
+    let origcol = col(".")
+    let origline = line(".")
+
+    " How many levels were started on the last line?  Search backwards for
+    " pair starters until we're not on the last nonblank.
+    if a:LastLine =~ a:Head
+        while 1
+            let pairstart = searchpair(a:Head, a:Mid, a:Tail, 'Wb')
+            if pairstart == 0 || pairstart != a:LastLNum
+                break
+            endif
+            let syn = synIDattr(synID(line("."), col("."), 1), "name")
+            if syn =~ 'shComment\|sh\(Single\|Double\)Quote'
+                continue
+            endif
+            let levels = levels + 1
+        endwhile
+    endif
+
+    " If we aren't within a level that was started on the last line, then
+    " check how many levels were closed on the last line.
+    if levels == 0
+
+        " Move to the beginning of the last line
+        call cursor(a:LastLNum,0)
+        normal ^
+
+        " If the line starts with an open, The close shouldn't be counted as
+        " such, because we're looking for closes that didn't start on this
+        " line.
+        if a:LastLine =~ '^\s*' . a:Head || 
+                    \ (a:Mid != '' && a:LastLine =~ '^\s*' . a:Mid)
+            let levels = 1
+        endif
+
+        " If we're calculating close parens and this is a new case condition,
+        " then the next close is the end of the conditional and we don't want
+        " to count it.
+        if a:Tail == ')'
+            if "shCaseEsac" == synIDattr(synID(line("."), col("."), 1), "name")
+                call searchpair(a:Head, a:Mid, a:Tail, 'W')
+            endif
+        endif
+
+        " Count the closes on the current line (i.e. LastLNum), stopping once
+        " we've hit comments.
+        if a:LastLine =~ a:Tail
+            while 1
+                let pairend = searchpair(a:Head, a:Mid, a:Tail, 'W')
+                if pairend == 0 || a:LastLNum != pairend 
+                    break
+                endif
+                let syn = synIDattr(synID(line("."), col("."), 1), "name")
+                if syn =~ 'shComment\|sh\(Single\|Double\)Quote'
+                    break
+                endif
+                let levels = levels - 1
+            endwhile
+        endif
+    endif
+
+    " If the current line starts with a close, count it.  It won't effect the
+    " indentation of the next line because it is the first thing on the line
+    " and won't be counted as a "close on the last line".
+    if a:CurrLine =~ '^\s*' . a:Tail 
+                \ || (a:Mid != '' && a:CurrLine =~ '^\s*' . a:Mid)
+        let levels = levels - 1
+    endif
+
+    " Restore original cursor location
+    call cursor(origline, origcol)
+
+    let adj = &sw*levels
+    if adj != 0 && b:super_sh_indent_echo
+        let g:lastindent = g:lastindent . 
+                    \ "GetPairIndent(" . a:Head . "):" . adj . " "
+    endif
+
+    return adj
+
+endfunction
